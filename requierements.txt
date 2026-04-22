@@ -1,3 +1,6 @@
-kafka-python-ng  
-faker           
-uuid            
+# Producer (producer.py)
+kafka-python-ng==2.2.3
+faker==30.8.2
+
+# Consumer Spark (pyspark_consumer.py)
+pyspark==3.5.0
