@@ -1,14 +1,25 @@
-"""
+# ==============================================================================
+# PROJET INDUTECH - DOCKERFILE PRODUCER
+# Rôle : Exécuter en continu le script producer.py qui génère des tickets
+#        clients et les envoie vers Redpanda.
+# ==============================================================================
 
-2. DOCKERFILE : PRODUCER (Le Générateur Python)
---------------------------------------------------------------------------------
-RÔLE : Faire tourner ton script producer.py en continu.
-IMAGE DE BASE : python:3.9-slim
-ACTIONS :
-   [ ] Créer un dossier /app dans le conteneur
-   [ ] Copier 'requirements.txt' (contenant kafka-python et faker)
-   [ ] Lancer 'pip install'
-   [ ] Copier 'producer.py'
-   [ ] COMMANDE : python producer.py
-     
-"""
+FROM python:3.9-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Dépendances Python
+COPY requierements.txt ./requierements.txt
+RUN pip install --no-cache-dir -r requierements.txt
+
+# Code applicatif
+COPY producer/producer.py ./producer.py
+
+# Broker interne par défaut (réseau docker-compose)
+ENV KAFKA_BROKER=redpanda-0:9092 \
+    KAFKA_TOPIC=client_tickets
+
+CMD ["python", "producer.py"]
