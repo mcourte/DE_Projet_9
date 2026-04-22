@@ -3,7 +3,8 @@
 POC d'un pipeline de streaming pour l'analyse en temps réel des tickets clients
 d'InduTech. Les tickets sont générés par un producteur Python, envoyés dans un
 broker **Redpanda** (compatible Kafka), puis consommés et enrichis par un job
-**PySpark Structured Streaming** qui écrit les résultats en **Parquet**.
+**PySpark Structured Streaming** qui persiste les résultats dans **MySQL**
+(avec une copie en Parquet pour l'analyse froide).
 
 ---
 
@@ -27,8 +28,10 @@ flowchart LR
     end
 
     subgraph Sinks["Sinks de sortie"]
-        O1["/tmp/indutech/output/tickets<br/>(Parquet)"]
-        O2["/tmp/indutech/output/agg_par_type<br/>(Parquet)"]
+        M1[("MySQL<br/>tickets")]
+        M2[("MySQL<br/>tickets_agg_par_type")]
+        O1["Parquet<br/>/tmp/indutech/output/tickets"]
+        O2["Parquet<br/>/tmp/indutech/output/agg_par_type"]
         O3["Console<br/>(monitoring temps reel)"]
     end
 
@@ -37,10 +40,23 @@ flowchart LR
     T -.-> C
     R --> E
     E --> A
+    E -- "foreachBatch<br/>+ retry JDBC" --> M1
+    A -- "foreachBatch<br/>+ retry JDBC" --> M2
     E --> O1
     A --> O2
     E --> O3
 ```
+
+## Démo vidéo
+
+[![Démo POC InduTech](https://img.youtube.com/vi/VIDEO_ID/maxresdefault.jpg)](https://youtu.be/VIDEO_ID)
+
+> Démo de ~5 min : démarrage du broker Redpanda, génération de tickets par
+> le producer Python, consommation PySpark Structured Streaming et
+> vérification des sorties Parquet. Le script détaillé est dans
+> [VIDEO_SCRIPT.md](VIDEO_SCRIPT.md).
+
+---
 
 ### Schema d'un ticket
 
@@ -59,8 +75,10 @@ flowchart LR
 
 ```
 DE_Projet_9/
-├── docker-compose.yml        # Orchestration Redpanda + Console
+├── docker-compose.yml        # Orchestration Redpanda + Console + MySQL
 ├── requierements.txt         # Dependances Python communes
+├── mysql/
+│   └── init.sql              # Schema MySQL (tables tickets + agg)
 ├── producer/
 │   ├── Dockerfile
 │   └── producer.py           # Generateur de tickets
@@ -82,14 +100,18 @@ DE_Projet_9/
 
 ## Demarrage rapide
 
-### 1. Lancer le broker Redpanda
+### 1. Lancer Redpanda + MySQL
 
 ```bash
-docker compose up -d redpanda-0 console
+docker compose up -d redpanda-0 console mysql
 ```
 
 - Broker Kafka API : `localhost:19092` (externe) / `redpanda-0:9092` (interne)
 - Console Redpanda : http://localhost:8080
+- MySQL : `localhost:3306` (db `indutech`, user `indutech`/`indutech`)
+
+Le schéma (`tickets`, `tickets_agg_par_type`) est créé automatiquement au
+premier démarrage via [mysql/init.sql](mysql/init.sql).
 
 ### 2. Creer le topic (si non auto-cree)
 
@@ -127,7 +149,7 @@ docker run --rm --network redpanda-quickstart-one-broker_redpanda_network \
 **En local** :
 ```bash
 spark-submit \
-    --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 \
+    --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,com.mysql:mysql-connector-j:8.4.0 \
     spark/pyspark_consumer.py
 ```
 
@@ -141,7 +163,11 @@ spark-submit \
 | `KAFKA_TOPIC`      | `client_tickets`           | producer + spark    |
 | `OUTPUT_PATH`      | `/tmp/indutech/output`     | spark               |
 | `CHECKPOINT_PATH`  | `/tmp/indutech/checkpoint` | spark               |
-| `OUTPUT_FORMAT`    | `parquet`                  | spark               |
+| `MYSQL_HOST`       | `mysql`                    | spark               |
+| `MYSQL_PORT`       | `3306`                     | spark               |
+| `MYSQL_DB`         | `indutech`                 | spark               |
+| `MYSQL_USER`       | `indutech`                 | spark               |
+| `MYSQL_PASSWORD`   | `indutech`                 | spark               |
 
 ---
 
@@ -156,6 +182,17 @@ spark-submit \
 - **Agregation fenetree** : nombre de tickets par `type` / `equipe_support`
   sur une fenetre glissante de 1 minute, watermark de 2 minutes.
 
+### Résilience
+
+- Écriture MySQL via `foreachBatch` + retry exponentiel (5 tentatives,
+  backoff 2^n) pour absorber les déconnexions JDBC.
+- **Checkpointing Spark** : en cas d'échec définitif, le micro-batch est
+  rejoué automatiquement au redémarrage.
+- `failOnDataLoss=false` et `maxOffsetsPerTrigger=1000` côté Kafka pour
+  éviter les à-coups de charge.
+- Option `rewriteBatchedStatements=true` dans l'URL JDBC pour accélérer
+  les insertions en lot.
+
 ---
 
 ## Verification
@@ -163,6 +200,15 @@ spark-submit \
 Lister les messages dans le topic :
 ```bash
 docker exec -it redpanda-0 rpk topic consume client_tickets --num 5
+```
+
+Interroger MySQL :
+```bash
+docker exec -it indutech-mysql mysql -uindutech -pindutech indutech \
+    -e "SELECT type, equipe_support, COUNT(*) FROM tickets GROUP BY type, equipe_support;"
+
+docker exec -it indutech-mysql mysql -uindutech -pindutech indutech \
+    -e "SELECT * FROM tickets_agg_par_type ORDER BY window_start DESC LIMIT 10;"
 ```
 
 Inspecter les fichiers Parquet produits :

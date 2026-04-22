@@ -4,6 +4,7 @@ networks:
     driver: bridge
 volumes:
   redpanda-0: null
+  mysql-data: null
 services:
   redpanda-0:
     command:
@@ -62,3 +63,23 @@ services:
       - 8080:8080
     depends_on:
       - redpanda-0
+  mysql:
+    image: mysql:8.0
+    container_name: indutech-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: indutech
+      MYSQL_USER: indutech
+      MYSQL_PASSWORD: indutech
+    ports:
+      - 3306:3306
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - redpanda_network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uindutech", "-pindutech"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
