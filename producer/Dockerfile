@@ -12,8 +12,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # Dépendances Python
-COPY requierements.txt ./requierements.txt
-RUN pip install --no-cache-dir -r requierements.txt
+COPY requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Code applicatif
 COPY producer/producer.py ./producer.py
